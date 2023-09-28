@@ -1,0 +1,74 @@
+package com.generate.core.segment.service.impl;
+
+
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
+import com.generate.common.base.Constants;
+import com.generate.common.base.ResultWrapper;
+import com.generate.common.exception.BizException;
+import com.generate.core.LeafService;
+import com.generate.core.segment.database.entity.LeafAlloc;
+import com.generate.core.segment.database.entity.LeafInfo;
+import com.generate.core.segment.database.service.LeafAllocService;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+@Slf4j
+@Service
+public class SegmentLeafServiceImpl implements LeafService {
+
+    @Autowired
+    LeafAllocService leafAllocService;
+
+    @Override
+    public LeafInfo getLeafInfo(String key) {
+        String[] split = key.split(Constants.SPLIT_CHAR);
+        String sysId = split[0];
+        String bizTag = split[1];
+        log.info("query sysId ");
+        ResultWrapper<LeafAlloc> result = leafAllocService.findBySystemIdAndBizTag(sysId, bizTag);
+        if (!result.isSuccess()) {
+            log.info("获取leaf alloc 出错");
+        }
+        LeafAlloc info = result.getData();
+        if (info == null) {
+            throw new BizException("不存在此tag:{" + key + "}的数据");
+        }
+        Boolean enableFlag = info.getEnableFlag();
+        if (enableFlag == null || !enableFlag) {
+            throw new BizException("此tag:{" + key + "}的数据已经被禁用");
+        }
+        log.info("tag:{},info:{}", key, info);
+        //步长
+        Integer step = info.getStep();
+        Long maxId = info.getMaxId();
+        Long newMaxId = step + maxId;
+        info.setMaxId(newMaxId);
+        // TODO: 2023/2/28 集中更新数据库可能对数据库压力很大
+        if (!update(sysId,bizTag,maxId,info)) {
+            throw new BizException("更新失败");
+        }
+        return resultLeafInfo(info, maxId);
+    }
+
+    private LeafInfo resultLeafInfo(LeafAlloc info, Long oldMaxId) {
+        LeafInfo leafInfo = new LeafInfo();
+        leafInfo.setMaxId(info.getMaxId());
+        leafInfo.setCurId(oldMaxId);
+        leafInfo.setTag(info.getBizTag());
+        leafInfo.setDescription(info.getDescription());
+        return leafInfo;
+    }
+    private boolean update(String sysId, String bizTag,Long maxId,LeafAlloc leafAlloc){
+        LambdaUpdateWrapper<LeafAlloc> wrapper = new UpdateWrapper<LeafAlloc>().lambda()
+                .eq(LeafAlloc::getSystemId, sysId)
+                .eq(LeafAlloc::getBizTag, bizTag)
+                .eq(LeafAlloc::getMaxId, maxId);
+        boolean res = false;
+        for (int i = Constants.MAX_TRIES; i > 0 && !res; i--) {
+            res = leafAllocService.update(leafAlloc,wrapper);
+        }
+        return res;
+    }
+}
